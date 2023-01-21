@@ -2,17 +2,20 @@ use anyhow::Ok;
 use anyhow::Result;
 use bytes::buf::BufExt;
 use flate2::read::ZlibDecoder;
-#[allow(unused_imports)]
+use flate2::Compression;
+use flate2::write::ZlibEncoder;
+use sha1::{Digest, Sha1};
 use std::env;
-#[allow(unused_imports)]
-use std::fs;
-use std::io::Read;
+use std::io::Write;
+use std::path::Path;
+use std::{fs, io::Read};
 
 const NULL_CHAR: char = '\0';
 
 enum Command {
     Init,
     CatFile,
+    HashObject,
     Unknown,
 }
 
@@ -21,6 +24,7 @@ impl Command {
         match arg {
             "init" => Command::Init,
             "cat-file" => Command::CatFile,
+            "hash-object" => Command::HashObject,
             _ => Command::Unknown,
         }
     }
@@ -47,6 +51,7 @@ fn main() -> Result<()> {
     let _ = match command {
         Command::Init => execute_init(),
         Command::CatFile => execute_cat_file(&args[3]),
+        Command::HashObject => execute_hash_object(&args[3]),
         Command::Unknown => execute_unknown_command(&args[1]),
     };
     Ok(())
@@ -65,6 +70,36 @@ fn execute_cat_file(hash: &str) -> Result<()> {
     let file_path = get_object_file_path(hash)?;
     let contents = read_object_file_contents(&file_path)?;
     handle_object(&contents)
+}
+
+fn execute_hash_object(file_path: &str) -> Result<()> {
+    let contents = fs::read_to_string(file_path).unwrap();
+    let blob_contents = format!("blob {}\0{}", contents.len(), contents);
+    let blob_hash = calculate_blob_hash(&blob_contents)?;
+    write_object_file(&blob_hash, &blob_contents)?;
+    println!("{}", blob_hash);
+    Ok(())
+}
+
+fn write_object_file(blob_hash: &str, blob_contents: &str) -> Result<()> {
+    let object_file_path = get_object_file_path(blob_hash)?;
+
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    let _ = encoder.write(blob_contents.as_bytes())?;
+    let compressed = encoder.finish()?;
+
+    let parent_dir = Path::new(&object_file_path).parent().unwrap();
+    fs::create_dir_all(parent_dir)?;
+    fs::write(object_file_path, compressed)?;
+    Ok(())
+}
+
+fn calculate_blob_hash(blob_contents: &str) -> Result<String> {
+    let mut hasher = Sha1::default();
+    hasher.update(blob_contents);
+    let compressed = hasher.finalize();
+    let s = format!("{:02x}", compressed);
+    Ok(s)
 }
 
 fn execute_unknown_command(arg: &str) -> Result<()> {
