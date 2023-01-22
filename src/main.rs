@@ -1,21 +1,24 @@
+use crate::object::Object;
 use anyhow::Ok;
 use anyhow::Result;
-use bytes::buf::BufExt;
 use flate2::read::ZlibDecoder;
-use flate2::Compression;
 use flate2::write::ZlibEncoder;
+use flate2::Compression;
 use sha1::{Digest, Sha1};
 use std::env;
+use std::fs::File;
+use std::io::BufReader;
 use std::io::Write;
 use std::path::Path;
 use std::{fs, io::Read};
 
-const NULL_CHAR: char = '\0';
+mod object;
 
 enum Command {
     Init,
     CatFile,
     HashObject,
+    LsTree,
     Unknown,
 }
 
@@ -25,21 +28,8 @@ impl Command {
             "init" => Command::Init,
             "cat-file" => Command::CatFile,
             "hash-object" => Command::HashObject,
+            "ls-tree" => Command::LsTree,
             _ => Command::Unknown,
-        }
-    }
-}
-
-enum ObjectType {
-    Blob,
-    Unknown,
-}
-
-impl ObjectType {
-    pub fn from(object_type: &str) -> Self {
-        match object_type {
-            "blob" => ObjectType::Blob,
-            _ => ObjectType::Unknown,
         }
     }
 }
@@ -52,6 +42,7 @@ fn main() -> Result<()> {
         Command::Init => execute_init(),
         Command::CatFile => execute_cat_file(&args[3]),
         Command::HashObject => execute_hash_object(&args[3]),
+        Command::LsTree => execute_ls_tree(&args[3]),
         Command::Unknown => execute_unknown_command(&args[1]),
     };
     Ok(())
@@ -69,7 +60,8 @@ fn execute_init() -> Result<()> {
 fn execute_cat_file(hash: &str) -> Result<()> {
     let file_path = get_object_file_path(hash)?;
     let contents = read_object_file_contents(&file_path)?;
-    handle_object(&contents)
+    let object = Object::from(contents)?;
+    object.print_body()
 }
 
 fn execute_hash_object(file_path: &str) -> Result<()> {
@@ -102,6 +94,14 @@ fn calculate_blob_hash(blob_contents: &str) -> Result<String> {
     Ok(s)
 }
 
+fn execute_ls_tree(tree_sha: &str) -> Result<()> {
+    let object_file_path = get_object_file_path(tree_sha)?;
+    let contents = read_object_file_contents(&object_file_path)?;
+
+    let object = Object::from(contents)?;
+    object.print_body()
+}
+
 fn execute_unknown_command(arg: &str) -> Result<()> {
     println!("unknown command: {}", arg);
     Ok(())
@@ -113,28 +113,10 @@ fn get_object_file_path(object: &str) -> Result<String> {
     Ok(path)
 }
 
-fn read_object_file_contents(file_path: &str) -> Result<String> {
-    let contents = fs::read(file_path).unwrap();
-    let mut deflated_object = String::new();
-    let _ = ZlibDecoder::new(contents.reader())
-        .read_to_string(&mut deflated_object)
-        .unwrap();
+fn read_object_file_contents(file_path: &str) -> Result<Vec<u8>> {
+    let reader = BufReader::new(File::open(file_path).unwrap());
+    let mut deflated_object = Vec::new();
+    let mut decoder = ZlibDecoder::new(reader);
+    decoder.read_to_end(&mut deflated_object).unwrap();
     Ok(deflated_object)
-}
-
-fn handle_object(contents: &str) -> Result<()> {
-    let split_null = split_at_null_char(contents);
-    let split_space = split_null[0].split_whitespace().collect::<Vec<&str>>();
-    let object_type = ObjectType::from(split_space[0]);
-    match object_type {
-        ObjectType::Blob => {
-            print!("{}", split_null[1]);
-        }
-        _ => println!("Not implimented"),
-    }
-    Ok(())
-}
-
-fn split_at_null_char(target: &str) -> Vec<&str> {
-    target.split(NULL_CHAR).collect::<Vec<&str>>()
 }
