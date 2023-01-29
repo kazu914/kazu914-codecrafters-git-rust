@@ -1,16 +1,13 @@
 use crate::object::Object;
 use anyhow::Ok;
 use anyhow::Result;
-use flate2::read::ZlibDecoder;
-use flate2::write::ZlibEncoder;
-use flate2::Compression;
-use sha1::{Digest, Sha1};
+
+use object::TreeItem;
+use object::TreeObject;
 use std::env;
-use std::fs::File;
-use std::io::BufReader;
-use std::io::Write;
+use std::fs;
 use std::path::Path;
-use std::{fs, io::Read};
+use std::path::PathBuf;
 
 mod object;
 
@@ -19,6 +16,7 @@ enum Command {
     CatFile,
     HashObject,
     LsTree,
+    WriteTree,
     Unknown,
 }
 
@@ -29,6 +27,7 @@ impl Command {
             "cat-file" => Command::CatFile,
             "hash-object" => Command::HashObject,
             "ls-tree" => Command::LsTree,
+            "write-tree" => Command::WriteTree,
             _ => Command::Unknown,
         }
     }
@@ -43,6 +42,7 @@ fn main() -> Result<()> {
         Command::CatFile => execute_cat_file(&args[3]),
         Command::HashObject => execute_hash_object(&args[3]),
         Command::LsTree => execute_ls_tree(&args[3]),
+        Command::WriteTree => execute_write_tree(),
         Command::Unknown => execute_unknown_command(&args[1]),
     };
     Ok(())
@@ -58,65 +58,69 @@ fn execute_init() -> Result<()> {
 }
 
 fn execute_cat_file(hash: &str) -> Result<()> {
-    let file_path = get_object_file_path(hash)?;
-    let contents = read_object_file_contents(&file_path)?;
-    let object = Object::from(contents)?;
+    let object = Object::from_hash(hash)?;
     object.print_body()
 }
 
 fn execute_hash_object(file_path: &str) -> Result<()> {
-    let contents = fs::read_to_string(file_path).unwrap();
-    let blob_contents = format!("blob {}\0{}", contents.len(), contents);
-    let blob_hash = calculate_blob_hash(&blob_contents)?;
-    write_object_file(&blob_hash, &blob_contents)?;
-    println!("{}", blob_hash);
+    let object = Object::from_target_file(file_path)?;
+    object.write_to_file()?;
+    let hash = object.get_hash_as_str()?;
+    print!("{}", hash);
     Ok(())
-}
-
-fn write_object_file(blob_hash: &str, blob_contents: &str) -> Result<()> {
-    let object_file_path = get_object_file_path(blob_hash)?;
-
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-    let _ = encoder.write(blob_contents.as_bytes())?;
-    let compressed = encoder.finish()?;
-
-    let parent_dir = Path::new(&object_file_path).parent().unwrap();
-    fs::create_dir_all(parent_dir)?;
-    fs::write(object_file_path, compressed)?;
-    Ok(())
-}
-
-fn calculate_blob_hash(blob_contents: &str) -> Result<String> {
-    let mut hasher = Sha1::default();
-    hasher.update(blob_contents);
-    let compressed = hasher.finalize();
-    let s = format!("{:02x}", compressed);
-    Ok(s)
 }
 
 fn execute_ls_tree(tree_sha: &str) -> Result<()> {
-    let object_file_path = get_object_file_path(tree_sha)?;
-    let contents = read_object_file_contents(&object_file_path)?;
-
-    let object = Object::from(contents)?;
+    let object = Object::from_hash(tree_sha)?;
     object.print_body()
+}
+
+fn execute_write_tree() -> Result<()> {
+    let object = write_tree(Path::new("./"))?;
+    let hash_str = object.get_hash_as_str()?;
+    print!("{}", hash_str);
+    Ok(())
+}
+
+fn write_tree(root: &Path) -> Result<Object> {
+    let mut tree_object = TreeObject::new();
+    let paths = fs::read_dir(root)?;
+    let mut entries: Vec<PathBuf> = paths
+        .filter(Result::is_ok)
+        .map(|e| e.unwrap().path())
+        .collect();
+    entries.sort();
+
+    for entry in entries {
+        let path = entry.as_path();
+        if path.starts_with("./.git/") {
+            continue;
+        }
+        if path.is_dir() {
+            let hash = write_tree(path)?.get_hash()?;
+            let tree_item = TreeItem::new(
+                "040000",
+                &entry.file_name().unwrap().to_string_lossy(),
+                hash,
+            );
+            tree_object.push(tree_item)?;
+        } else {
+            let hash = Object::from_target_file(&entry)?.get_hash()?;
+            let tree_item = TreeItem::new(
+                "100644",
+                &entry.file_name().unwrap().to_string_lossy(),
+                hash,
+            );
+            tree_object.push(tree_item)?;
+        }
+    }
+
+    let object = tree_object.to_object()?;
+    object.write_to_file()?;
+    Ok(object)
 }
 
 fn execute_unknown_command(arg: &str) -> Result<()> {
     println!("unknown command: {}", arg);
     Ok(())
-}
-
-fn get_object_file_path(object: &str) -> Result<String> {
-    let (sub_dir, basename) = object.split_at(2);
-    let path = format!(".git/objects/{}/{}", sub_dir, basename);
-    Ok(path)
-}
-
-fn read_object_file_contents(file_path: &str) -> Result<Vec<u8>> {
-    let reader = BufReader::new(File::open(file_path).unwrap());
-    let mut deflated_object = Vec::new();
-    let mut decoder = ZlibDecoder::new(reader);
-    decoder.read_to_end(&mut deflated_object).unwrap();
-    Ok(deflated_object)
 }
