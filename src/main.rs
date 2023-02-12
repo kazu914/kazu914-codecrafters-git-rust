@@ -99,7 +99,7 @@ fn write_tree(root: &Path) -> Result<Object> {
         if path.is_dir() {
             let hash = write_tree(path)?.get_hash()?;
             let tree_item = TreeItem::new(
-                "040000",
+                "40000",
                 &entry.file_name().unwrap().to_string_lossy(),
                 hash,
             );
