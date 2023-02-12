@@ -1,3 +1,4 @@
+use crate::object::CommitObject;
 use crate::object::Object;
 use anyhow::Ok;
 use anyhow::Result;
@@ -17,6 +18,7 @@ enum Command {
     HashObject,
     LsTree,
     WriteTree,
+    CommitTree,
     Unknown,
 }
 
@@ -28,6 +30,7 @@ impl Command {
             "hash-object" => Command::HashObject,
             "ls-tree" => Command::LsTree,
             "write-tree" => Command::WriteTree,
+            "commit-tree" => Command::CommitTree,
             _ => Command::Unknown,
         }
     }
@@ -43,6 +46,7 @@ fn main() -> Result<()> {
         Command::HashObject => execute_hash_object(&args[3]),
         Command::LsTree => execute_ls_tree(&args[3]),
         Command::WriteTree => execute_write_tree(),
+        Command::CommitTree => execute_commit_tree(&args[2], &args[4], &args[6]),
         Command::Unknown => execute_unknown_command(&args[1]),
     };
     Ok(())
@@ -82,6 +86,15 @@ fn execute_write_tree() -> Result<()> {
     Ok(())
 }
 
+fn execute_commit_tree(tree_sha: &str, commit_sha: &str, message: &str) -> Result<()> {
+    let commit_object = CommitObject::new(tree_sha, commit_sha, message)?;
+    let object = commit_object.to_object()?;
+    object.write_to_file()?;
+    let hash = object.get_hash_as_str()?;
+    println!("{}", hash);
+    Ok(())
+}
+
 fn write_tree(root: &Path) -> Result<Object> {
     let mut tree_object = TreeObject::new();
     let paths = fs::read_dir(root)?;
@@ -98,11 +111,8 @@ fn write_tree(root: &Path) -> Result<Object> {
         }
         if path.is_dir() {
             let hash = write_tree(path)?.get_hash()?;
-            let tree_item = TreeItem::new(
-                "40000",
-                &entry.file_name().unwrap().to_string_lossy(),
-                hash,
-            );
+            let tree_item =
+                TreeItem::new("40000", &entry.file_name().unwrap().to_string_lossy(), hash);
             tree_object.push(tree_item)?;
         } else {
             let hash = Object::from_target_file(&entry)?.get_hash()?;

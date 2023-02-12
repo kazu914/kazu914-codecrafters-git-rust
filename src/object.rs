@@ -7,6 +7,7 @@ use std::io::BufReader;
 use std::io::Read;
 use std::io::Write;
 use std::path::Path;
+use std::time::SystemTime;
 
 use anyhow::bail;
 use anyhow::Ok;
@@ -17,6 +18,7 @@ use sha1::{Digest, Sha1};
 pub enum ObjectType {
     Blob,
     Tree,
+    Commit,
 }
 
 impl ObjectType {
@@ -24,6 +26,7 @@ impl ObjectType {
         match object_type {
             "blob" => Ok(ObjectType::Blob),
             "tree" => Ok(ObjectType::Tree),
+            "commit" => Ok(ObjectType::Commit),
             _ => bail!("Unknown Object Type"),
         }
     }
@@ -34,6 +37,7 @@ impl fmt::Display for ObjectType {
         match *self {
             ObjectType::Blob => write!(f, "blob"),
             ObjectType::Tree => write!(f, "tree"),
+            ObjectType::Commit => write!(f, "commit"),
         }
     }
 }
@@ -84,7 +88,7 @@ impl Object {
 
     pub fn print_body(&self) -> Result<()> {
         match self.object_type {
-            ObjectType::Blob => {
+            ObjectType::Blob | ObjectType::Commit => {
                 print!("{}", String::from_utf8(self.object_body.to_vec()).unwrap());
             }
             ObjectType::Tree => Object::print_tree_object(self.object_body.to_vec())?,
@@ -246,6 +250,66 @@ impl TreeObject {
             println!("{}", tree_item.base_name);
         }
         Ok(())
+    }
+
+    pub fn to_object(&self) -> Result<Object> {
+        Object::from(self.get_contents_as_bytes()?)
+    }
+}
+
+pub struct CommitObject {
+    tree_sha: Vec<u8>,
+    parents: Vec<Vec<u8>>,
+    message: String,
+}
+
+impl CommitObject {
+    pub fn new(tree_sha: &str, commit_sha: &str, message: &str) -> Result<Self> {
+        Ok(Self {
+            tree_sha: tree_sha.as_bytes().to_vec(),
+            parents: vec![commit_sha.as_bytes().to_vec()],
+            message: message.to_string(),
+        })
+    }
+
+    pub fn get_contents_as_bytes(&self) -> Result<Vec<u8>> {
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)?
+            .as_secs();
+
+        let mut body: Vec<u8> = Vec::new();
+        body.extend("tree ".as_bytes());
+        body.extend(self.tree_sha.clone());
+        body.extend("\n".as_bytes());
+
+        body.extend("parent ".as_bytes());
+        body.extend(self.parents[0].clone());
+        body.extend("\n".as_bytes());
+
+        body.extend(
+            format!(
+                "author {} <{}> {} {}\n",
+                "test user", "test_user@example.com", timestamp, "+0000"
+            )
+            .as_bytes(),
+        );
+
+        body.extend(
+            format!(
+                "committer {} <{}> {} {}\n",
+                "test user", "test_user@example.com", timestamp, "+0000"
+            )
+            .as_bytes(),
+        );
+
+        body.extend("\n".as_bytes());
+        body.extend(self.message.as_bytes());
+        body.extend("\n".as_bytes());
+
+        let mut contents = Vec::new();
+        contents.extend(format!("commit {}\0", body.len()).as_bytes());
+        contents.extend(body);
+        Ok(contents)
     }
 
     pub fn to_object(&self) -> Result<Object> {
